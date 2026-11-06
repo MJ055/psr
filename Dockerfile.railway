@@ -1,0 +1,60 @@
+# PasarGuard — self-contained image (dashboard built inside the image).
+# Works on Railway, Coolify, Docker Compose or a plain `docker run`.
+ARG PYTHON_VERSION=3.14
+
+FROM ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-bookworm-slim AS pybuilder
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc python3-dev libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev || uv sync --no-install-project --no-dev
+COPY . /build
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev || uv sync --no-dev
+
+
+FROM oven/bun:latest AS dashbuilder
+WORKDIR /dashboard
+COPY dashboard/package.json dashboard/bun.lock ./
+RUN bun install --frozen-lockfile || bun install
+COPY dashboard/ ./
+ARG DASHBOARD_BASE_API=/
+ENV VITE_BASE_API=${DASHBOARD_BASE_API}
+RUN bun run build
+
+
+FROM python:${PYTHON_VERSION}-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PATH="/code/.venv/bin:$PATH" \
+    PASARGUARD_DATA_DIR=/var/lib/pasarguard
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl postgresql-client default-mysql-client tini \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=pybuilder /build /code
+COPY --from=dashbuilder /dashboard/build /code/dashboard/build
+
+WORKDIR /code
+
+COPY cli_wrapper.sh /usr/bin/pasarguard-cli
+COPY tui_wrapper.sh /usr/bin/pasarguard-tui
+COPY healthcheck.sh /code/healthcheck.sh
+COPY railway/entrypoint.sh /code/entrypoint.sh
+RUN chmod +x /usr/bin/pasarguard-cli /usr/bin/pasarguard-tui /code/healthcheck.sh /code/entrypoint.sh \
+    && mkdir -p /var/lib/pasarguard
+
+VOLUME ["/var/lib/pasarguard"]
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+    CMD ["/bin/bash", "/code/healthcheck.sh"]
+
+ENTRYPOINT ["/usr/bin/tini", "--", "/code/entrypoint.sh"]

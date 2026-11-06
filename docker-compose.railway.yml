@@ -1,0 +1,46 @@
+# Self-hosted stack for VPS / Coolify / local Docker (mirrors the Railway deploy).
+#   docker compose -f docker-compose.railway.yml up -d --build
+services:
+  pasarguard:
+    build:
+      context: .
+      dockerfile: Dockerfile.railway
+    image: pasarguard-panel:custom
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      UVICORN_HOST: 0.0.0.0
+      UVICORN_PORT: 8000
+      PASARGUARD_DATA_DIR: /var/lib/pasarguard
+    ports:
+      - "8000:8000"
+    volumes:
+      - pasarguard-data:/var/lib/pasarguard
+    healthcheck:
+      test: ["CMD", "/bin/bash", "/code/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional PostgreSQL. To use it, uncomment the service and point the panel at it:
+  #   SQLALCHEMY_DATABASE_URL=postgresql+asyncpg://pasarguard:pasarguard@postgres:5432/pasarguard
+  # postgres:
+  #   image: postgres:16-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: pasarguard
+  #     POSTGRES_PASSWORD: pasarguard
+  #     POSTGRES_DB: pasarguard
+  #   volumes:
+  #     - pasarguard-pg:/var/lib/postgresql/data
+
+volumes:
+  pasarguard-data:
+  # pasarguard-pg:
